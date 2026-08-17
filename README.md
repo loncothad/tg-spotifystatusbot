@@ -14,7 +14,7 @@ The example image above is produced by the renderer crate via `just render-examp
 - `/now` — upload a freshly rendered JPEG to the chat
 - Admins: `/allow`, `/deny`, `/allowlist` (admins come from `ADMIN_USER_IDS` only)
 - Inline (`@your_bot` in any chat) — query text is ignored; you always get **your** current track
-- Empty / not-linked / error states render dedicated cards
+- `/now` and inline send a card only when a track is loaded; idle/errors are text (or no inline result)
 - Inline results use `cache_time = 0` and `is_personal = true`
 - Card URLs are HMAC-signed and short-lived; Telegram fetching them still renders live (`Cache-Control: no-store`)
 
@@ -38,6 +38,9 @@ IDs that we generate (OAuth `state`, inline result ids, temp filenames) are **UU
    `https://<your-public-host>/oauth/callback`
 
    That host must be reachable by both Spotify (OAuth redirect) and Telegram (inline photo URL). HTTPS is required in production.
+
+5. In the Spotify dashboard, enable **Web API** only.
+6. While the app is in **development mode**, add every tester under **Users and Access**. OAuth can succeed for people who are not listed; playback then fails with 403 until you add them (or apply for extended quota).
 
 ## Configuration
 

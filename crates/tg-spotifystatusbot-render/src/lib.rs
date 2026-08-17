@@ -646,9 +646,9 @@ fn draw_status_watermark(
     let cx = width as f32 - size * 0.42;
     let cy = height as f32 * 0.58;
     if is_playing {
-        draw_pause_mark(img, cx, cy, size, accent, 0.055);
-    } else {
         draw_play_mark(img, cx, cy, size, accent, 0.055);
+    } else {
+        draw_pause_mark(img, cx, cy, size, accent, 0.055);
     }
 }
 
@@ -775,12 +775,19 @@ fn draw_listener_line(
     max_width: i32,
 ) {
     let size = 48.0;
-    blit_avatar(img, avatar, x, y, AVATAR_SIZE);
-    let text_x = x + AVATAR_SIZE as i32 + 14;
-    let text_y = y + (AVATAR_SIZE as i32 - size as i32) / 2;
     let suffix = " is now playing";
     let suffix_w = fonts.measure(suffix, size, false);
-    let name_budget = (max_width - AVATAR_SIZE as i32 - 14 - suffix_w).max(48);
+    let decoded = avatar.and_then(|bytes| decode_art(Some(bytes), AVATAR_SIZE));
+    let (text_x, name_budget) = if let Some(src) = decoded.as_ref() {
+        blit_rounded(img, src, x, y, AVATAR_SIZE / 2);
+        (
+            x + AVATAR_SIZE as i32 + 14,
+            (max_width - AVATAR_SIZE as i32 - 14 - suffix_w).max(48),
+        )
+    } else {
+        (x, (max_width - suffix_w).max(48))
+    };
+    let text_y = y + (AVATAR_SIZE as i32 - size as i32) / 2;
     let name = ellipsize(fonts, size, true, username, name_budget);
     fonts.draw(img, theme().white, text_x, text_y, size, true, &name);
     let name_w = fonts.measure(&name, size, true);
@@ -793,12 +800,6 @@ fn draw_listener_line(
         false,
         suffix,
     );
-}
-
-fn blit_avatar(img: &mut RgbaImage, bytes: Option<&[u8]>, x: i32, y: i32, size: u32) {
-    let src = decode_art(bytes, size)
-        .unwrap_or_else(|| RgbaImage::from_pixel(size, size, theme().art_fallback));
-    blit_rounded(img, &src, x, y, size / 2);
 }
 
 #[allow(clippy::too_many_arguments)]

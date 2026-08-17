@@ -142,7 +142,8 @@ async fn card(
     }
 
     match render_fresh_jpeg(&state, user_id).await {
-        Ok(bytes) => {
+        Ok(None) => (StatusCode::NOT_FOUND, "Nothing playing").into_response(),
+        Ok(Some(bytes)) => {
             let mut response = bytes.into_response();
             response
                 .headers_mut()
@@ -160,9 +161,15 @@ async fn card(
     }
 }
 
-async fn render_fresh_jpeg(state: &AppState, user_id: u64) -> crate::error::Result<Vec<u8>> {
+async fn render_fresh_jpeg(
+    state: &AppState,
+    user_id: u64,
+) -> crate::error::Result<Option<Vec<u8>>> {
     let kind = state.spotify.card_for_user(&state.store, user_id).await?;
-    render_jpeg(kind).await
+    if !matches!(kind, tg_spotifystatusbot_render::CardKind::Playing { .. }) {
+        return Ok(None);
+    }
+    render_jpeg(kind).await.map(Some)
 }
 
 fn html_page(status: StatusCode, title: &str, body: &str) -> Response {

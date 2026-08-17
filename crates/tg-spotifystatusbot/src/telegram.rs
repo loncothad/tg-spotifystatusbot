@@ -307,6 +307,9 @@ async fn send_link(state: &AppState, chat_id: i64, user_id: u64) -> Result<()> {
 
 async fn send_now(state: &AppState, chat_id: i64, user_id: u64) -> Result<()> {
     let kind = state.spotify.card_for_user(&state.store, user_id).await?;
+    let tg_spotifystatusbot_render::CardKind::Playing { .. } = &kind else {
+        return send_text(state, chat_id, &caption_for(&kind)).await;
+    };
     let jpeg = render_jpeg(kind.clone()).await?;
 
     let path = write_temp_jpeg(&jpeg)?;
@@ -366,18 +369,21 @@ async fn handle_inline_query(
         &state.config.card_signing_secret,
     );
     let kind = state.spotify.card_for_user(&state.store, user_id).await?;
-    let title = match &kind {
-        tg_spotifystatusbot_render::CardKind::Playing { title, artist, .. } => {
-            format_compact!("{title} — {artist}")
-        }
-        tg_spotifystatusbot_render::CardKind::Idle => CompactString::from("Nothing playing"),
-        tg_spotifystatusbot_render::CardKind::NotLinked => {
-            CompactString::from("Spotify isn't linked")
-        }
-        tg_spotifystatusbot_render::CardKind::Error { .. } => {
-            CompactString::from("Can't load playback")
-        }
+    let tg_spotifystatusbot_render::CardKind::Playing { title, artist, .. } = &kind else {
+        let params = AnswerInlineQueryParams::builder()
+            .inline_query_id(query.id)
+            .results(Vec::<InlineQueryResult>::new())
+            .cache_time(0)
+            .is_personal(true)
+            .build();
+        state
+            .bot
+            .answer_inline_query(&params)
+            .await
+            .map_err(AppError::telegram)?;
+        return Ok(());
     };
+    let title = format_compact!("{title} — {artist}");
 
     let photo = InlineQueryResultPhoto::builder()
         .id(format_compact!("{}", Uuid::now_v7()))

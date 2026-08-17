@@ -72,12 +72,23 @@ impl AppError {
             Self::InvalidOauthState => {
                 "That Spotify login link expired. Send /link and try again."
             }
-            Self::Spotify(_) => {
-                "I couldn't reach Spotify. Play something and try again, or /link if this keeps happening."
-            }
+            Self::Spotify(detail) => spotify_user_message(detail),
             Self::InvalidCardUrl => "That status image link is invalid or expired.",
             Self::Telegram(_) => "Telegram rejected the request. Try again in a moment.",
             _ => "Something went wrong. Try again in a moment.",
         }
+    }
+}
+
+fn spotify_user_message(detail: &str) -> &'static str {
+    let lower = detail.to_ascii_lowercase();
+    if lower.contains("not registered") || lower.contains("developer dashboard") {
+        "This Spotify app is in development mode. An admin must add your Spotify account under Users and Access in the Spotify Developer Dashboard."
+    } else if lower.contains("401") || lower.contains("invalid_grant") {
+        "Spotify login expired. Send /link and approve access again."
+    } else if lower.contains("429") {
+        "Spotify is rate-limiting requests. Try again in a minute."
+    } else {
+        "I couldn't reach Spotify. Play something and try again, or /link if this keeps happening."
     }
 }

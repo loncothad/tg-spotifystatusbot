@@ -36,7 +36,7 @@ pub struct Store {
 
 struct Inner {
     db: Database,
-    tokens: HashIndex<u64, SpotifyTokens>,
+    tokens: HashMap<u64, SpotifyTokens>,
     oauth: HashMap<CompactString, OauthState>,
     allowlist: HashIndex<u64, u8>,
 }
@@ -50,7 +50,7 @@ impl Store {
         }
         let db = Database::create(path.as_ref()).map_err(AppError::database)?;
         init_tables(&db)?;
-        let tokens = HashIndex::default();
+        let tokens = HashMap::default();
         let oauth = HashMap::default();
         let allowlist = HashIndex::default();
         hydrate(&db, &tokens, &oauth, &allowlist)?;
@@ -66,11 +66,10 @@ impl Store {
 
     pub async fn put_tokens(&self, telegram_user_id: u64, tokens: &SpotifyTokens) -> Result<()> {
         persist_user(&self.inner.db, telegram_user_id, Some(tokens))?;
-        let _ = self.inner.tokens.remove_async(&telegram_user_id).await;
         let _ = self
             .inner
             .tokens
-            .insert_async(telegram_user_id, tokens.clone())
+            .upsert_async(telegram_user_id, tokens.clone())
             .await;
         Ok(())
     }
@@ -85,7 +84,12 @@ impl Store {
 
     pub async fn delete_tokens(&self, telegram_user_id: u64) -> Result<bool> {
         let removed = persist_user(&self.inner.db, telegram_user_id, None)?;
-        let cached = self.inner.tokens.remove_async(&telegram_user_id).await;
+        let cached = self
+            .inner
+            .tokens
+            .remove_async(&telegram_user_id)
+            .await
+            .is_some();
         Ok(removed || cached)
     }
 
@@ -167,7 +171,7 @@ fn init_tables(db: &Database) -> Result<()> {
 
 fn hydrate(
     db: &Database,
-    tokens: &HashIndex<u64, SpotifyTokens>,
+    tokens: &HashMap<u64, SpotifyTokens>,
     oauth: &HashMap<CompactString, OauthState>,
     allowlist: &HashIndex<u64, u8>,
 ) -> Result<()> {

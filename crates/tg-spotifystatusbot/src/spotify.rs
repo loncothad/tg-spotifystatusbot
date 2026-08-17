@@ -15,7 +15,7 @@ const AUTH_URL: &str = "https://accounts.spotify.com/authorize";
 const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
 const CURRENTLY_PLAYING_URL: &str = "https://api.spotify.com/v1/me/player/currently-playing";
 const ME_URL: &str = "https://api.spotify.com/v1/me";
-const SCOPES: &str = "user-read-currently-playing user-read-private";
+const SCOPES: &str = "user-read-currently-playing user-read-playback-state user-read-private";
 
 #[derive(Clone, Debug)]
 pub struct SpotifyClient {
@@ -132,7 +132,7 @@ impl SpotifyClient {
 
         let challenge = pkce_challenge(&verifier);
         Ok(format_compact!(
-            "{AUTH_URL}?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&code_challenge_method=S256&code_challenge={}",
+            "{AUTH_URL}?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&code_challenge_method=S256&code_challenge={}&show_dialog=true",
             urlencoding::encode(&self.client_id),
             urlencoding::encode(&self.redirect_uri),
             urlencoding::encode(SCOPES),
@@ -184,7 +184,7 @@ impl SpotifyClient {
                 is_playing: now.is_playing,
                 album: now.album,
                 album_art: match now.album_art_url {
-                    Some(url) => Some(self.download_image(&url).await?),
+                    Some(url) => self.download_image(&url).await.ok(),
                     None => None,
                 },
                 avatar: profile.avatar,
@@ -308,7 +308,7 @@ impl SpotifyClient {
         let status = response.status();
         let text = response.text().await?;
         if !status.is_success() {
-            return Err(AppError::spotify(format_compact!("{status}: {text}")));
+            return Err(spotify_http_error(status, &text));
         }
         let parsed: TokenResponse = serde_json::from_str(&text)?;
         Ok(tokens_from_response(parsed, fallback_refresh, now_unix()))
@@ -318,6 +318,7 @@ impl SpotifyClient {
         let response = self
             .http
             .get(CURRENTLY_PLAYING_URL)
+            .query(&[("additional_types", "track,episode")])
             .bearer_auth(access_token)
             .send()
             .await?;
@@ -330,7 +331,7 @@ impl SpotifyClient {
             return Err(AppError::spotify("401 unauthorized"));
         }
         if !status.is_success() {
-            return Err(AppError::spotify(format_compact!("{status}: {text}")));
+            return Err(spotify_http_error(status, &text));
         }
         if text.trim().is_empty() {
             return Ok(Playback::Idle);
@@ -356,6 +357,34 @@ impl SpotifyClient {
             STANDARD.encode(format_compact!("{}:{}", self.client_id, self.client_secret))
         )
     }
+}
+
+fn spotify_http_error(status: reqwest::StatusCode, body: &str) -> AppError {
+    #[derive(Deserialize)]
+    struct ApiError {
+        error: Option<ApiErrorBody>,
+        error_description: Option<CompactString>,
+    }
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum ApiErrorBody {
+        Object {
+            message: Option<CompactString>,
+        },
+        Code(CompactString),
+    }
+    let parsed = serde_json::from_str::<ApiError>(body).ok();
+    let message = parsed.as_ref().and_then(|error| match &error.error {
+        Some(ApiErrorBody::Object { message }) => message.clone(),
+        Some(ApiErrorBody::Code(code)) => Some(code.clone()),
+        None => None,
+    });
+    let description = parsed.and_then(|error| error.error_description);
+    AppError::spotify(format_compact!(
+        "{status}: {} {}",
+        message.unwrap_or_default(),
+        description.unwrap_or_default()
+    ))
 }
 
 fn tokens_from_response(
