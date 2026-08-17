@@ -2,9 +2,15 @@
 
 Inline Telegram bot that OAuth-links each user's Spotify account and **always freshly renders** a now-playing card (album art, title, artist, progress bar). Nothing is cached: every `/now` and every inline query hits Spotify and draws a new image.
 
-![Example now-playing card](assets/example-status.png)
+CJK (Japanese), Cyrillic (Russian), and Latin (English):
 
-The example image above is produced by the renderer crate via `just render-example` (`cargo xtask render-example`).
+![Japanese now-playing card](assets/example-status.png)
+
+![Russian now-playing card](assets/example-status-ru.png)
+
+![English now-playing card](assets/example-status-en.png)
+
+These are produced by the renderer crate via `just render-example` (`cargo xtask render-example`).
 
 ## What it does
 
@@ -138,9 +144,7 @@ Cards use a stacked fallback so Latin, Cyrillic, and CJK can render:
 
 | File | Family | Scripts | License |
 | --- | --- | --- | --- |
-| `crates/tg-spotifystatusbot-render/assets/fonts/DroidSans.ttf` | [Droid Sans](https://www.droidfonts.com/) Regular | Latin | [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) |
-| `crates/tg-spotifystatusbot-render/assets/fonts/DroidSans-Bold.ttf` | [Droid Sans](https://www.droidfonts.com/) Bold | Latin | [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) |
-| `crates/tg-spotifystatusbot-render/assets/fonts/DroidSansFallbackFull.ttf` | [Droid Sans Fallback](https://www.droidfonts.com/) | CJK and other fallback glyphs | [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) |
-| `crates/tg-spotifystatusbot-render/assets/fonts/NotoSans.ttf` | [Noto Sans](https://fonts.google.com/noto/specimen/Noto+Sans) | Latin, Cyrillic, Greek | [SIL Open Font License 1.1](https://scripts.sil.org/OFL) |
+| `crates/tg-spotifystatusbot-render/assets/fonts/GoNotoKurrent-Regular.ttf` | [Go Noto Kurrent](https://github.com/satbyy/go-noto-universal) Regular | Latin, Cyrillic, Greek, CJK (Unihan IICore), and other living scripts | [SIL Open Font License 1.1](https://scripts.sil.org/OFL) |
+| `crates/tg-spotifystatusbot-render/assets/fonts/GoNotoKurrent-Bold.ttf` | [Go Noto Kurrent](https://github.com/satbyy/go-noto-universal) Bold | same | [SIL Open Font License 1.1](https://scripts.sil.org/OFL) |
 
-Droid fonts are from the Android Open Source Project / Google. Noto Sans is from [Google Fonts / Noto](https://github.com/notofonts/latin-greek-cyrillic). The example card uses **荒城の月** to exercise CJK fallback.
+Go Noto Kurrent is a merged [Noto](https://fonts.google.com/noto) build so Latin, Cyrillic, and CJK share one metric system. Upstream Noto fonts are from [Google Fonts / Noto](https://github.com/notofonts). Examples: **荒城の月**, **Подмосковные вечера**, **Greensleeves**.

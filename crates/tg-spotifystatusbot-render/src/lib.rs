@@ -12,25 +12,19 @@ use palette::{FromColor, OklabHue, Oklch, Srgb};
 pub const CARD_WIDTH: u32 = 1320;
 pub const CARD_HEIGHT: u32 = 504;
 
-const FONT_REGULAR: &[u8] = include_bytes!("../assets/fonts/DroidSans.ttf");
-const FONT_BOLD: &[u8] = include_bytes!("../assets/fonts/DroidSans-Bold.ttf");
-const FONT_EXTENDED: &[u8] = include_bytes!("../assets/fonts/NotoSans.ttf");
-const FONT_CJK: &[u8] = include_bytes!("../assets/fonts/DroidSansFallbackFull.ttf");
+const FONT_REGULAR: &[u8] = include_bytes!("../assets/fonts/GoNotoKurrent-Regular.ttf");
+const FONT_BOLD: &[u8] = include_bytes!("../assets/fonts/GoNotoKurrent-Bold.ttf");
 
 struct FontStack<'a> {
-    latin_regular: FontRef<'a>,
-    latin_bold: FontRef<'a>,
-    extended: FontRef<'a>,
-    cjk: FontRef<'a>,
+    regular: FontRef<'a>,
+    bold: FontRef<'a>,
 }
 
 impl FontStack<'static> {
     fn load() -> Result<Self> {
         Ok(Self {
-            latin_regular: FontRef::try_from_slice(FONT_REGULAR).map_err(|_| RenderError::Font)?,
-            latin_bold: FontRef::try_from_slice(FONT_BOLD).map_err(|_| RenderError::Font)?,
-            extended: FontRef::try_from_slice(FONT_EXTENDED).map_err(|_| RenderError::Font)?,
-            cjk: FontRef::try_from_slice(FONT_CJK).map_err(|_| RenderError::Font)?,
+            regular: FontRef::try_from_slice(FONT_REGULAR).map_err(|_| RenderError::Font)?,
+            bold: FontRef::try_from_slice(FONT_BOLD).map_err(|_| RenderError::Font)?,
         })
     }
 }
@@ -41,21 +35,25 @@ impl FontStack<'_> {
     }
 
     fn pick(&self, ch: char, bold: bool) -> &FontRef<'_> {
-        let primary = if bold {
-            &self.latin_bold
+        if bold && Self::has(&self.bold, ch) {
+            &self.bold
         } else {
-            &self.latin_regular
+            &self.regular
+        }
+    }
+
+    fn first_ink_left(&self, text: &str, size: f32, bold: bool) -> f32 {
+        let Some(ch) = text.chars().next() else {
+            return 0.0;
         };
-        if Self::has(primary, ch) {
-            return primary;
+        let scale = PxScale::from(size);
+        let font = self.pick(ch, bold);
+        let id = font.glyph_id(ch);
+        let glyph = id.with_scale_and_position(scale, point(0.0, 0.0));
+        if let Some(outlined) = font.outline_glyph(glyph) {
+            return outlined.px_bounds().min.x;
         }
-        if Self::has(&self.extended, ch) {
-            return &self.extended;
-        }
-        if Self::has(&self.cjk, ch) {
-            return &self.cjk;
-        }
-        primary
+        font.as_scaled(scale).h_side_bearing(id)
     }
 
     fn measure(&self, text: &str, size: f32, bold: bool) -> i32 {
@@ -80,13 +78,8 @@ impl FontStack<'_> {
         text: &str,
     ) {
         let scale = PxScale::from(size);
-        let primary = if bold {
-            &self.latin_bold
-        } else {
-            &self.latin_regular
-        };
-        let ascent = primary.as_scaled(scale).ascent();
-        let mut caret = x as f32;
+        let ascent = self.regular.as_scaled(scale).ascent();
+        let mut caret = x as f32 - self.first_ink_left(text, size, bold);
         for ch in text.chars() {
             let font = self.pick(ch, bold);
             let scaled = font.as_scaled(scale);
@@ -431,15 +424,55 @@ pub fn encode_jpeg(image: &RgbaImage, quality: u8) -> Result<Vec<u8>> {
 }
 
 pub fn example_playing_card() -> CardKind {
+    example_card_ja()
+}
+
+pub fn example_card_ja() -> CardKind {
+    example_card(
+        "山田",
+        "荒城の月",
+        "瀧廉太郎",
+        "日本の歌曲",
+        264.0,
+    )
+}
+
+pub fn example_card_ru() -> CardKind {
+    example_card(
+        "Анна",
+        "Подмосковные вечера",
+        "Василий Соловьёв-Седой",
+        "Песни военных лет",
+        28.0,
+    )
+}
+
+pub fn example_card_en() -> CardKind {
+    example_card(
+        "alex",
+        "Greensleeves",
+        "Traditional",
+        "English Airs",
+        145.0,
+    )
+}
+
+fn example_card(
+    username: &str,
+    title: &str,
+    artist: &str,
+    album: &str,
+    art_hue: f32,
+) -> CardKind {
     CardKind::Playing {
-        username: CompactString::from("山田"),
-        title: CompactString::from("荒城の月"),
-        artist: CompactString::from("瀧廉太郎"),
-        album: CompactString::from("日本の歌曲"),
+        username: CompactString::from(username),
+        title: CompactString::from(title),
+        artist: CompactString::from(artist),
+        album: CompactString::from(album),
         progress_ms: 83_000,
         duration_ms: 243_000,
         is_playing: true,
-        album_art: Some(synthetic_album_art()),
+        album_art: Some(synthetic_album_art_hue(art_hue)),
         avatar: Some(synthetic_avatar()),
         track_url: Some(CompactString::from(
             "https://open.spotify.com/track/example",
@@ -448,16 +481,21 @@ pub fn example_playing_card() -> CardKind {
 }
 
 pub fn synthetic_album_art() -> Vec<u8> {
+    synthetic_album_art_hue(264.0)
+}
+
+fn synthetic_album_art_hue(hue: f32) -> Vec<u8> {
     let mut art = RgbaImage::new(256, 256);
     for y in 0..256 {
         for x in 0..256 {
             let fx = x as f32 / 255.0;
             let fy = y as f32 / 255.0;
             let t = (fx * 0.55 + fy * 0.45).clamp(0.0, 1.0);
-            let r = (24.0 + 170.0 * t) as u8;
-            let g = (36.0 + 55.0 * (1.0 - t) + 50.0 * fy) as u8;
-            let b = (88.0 + 130.0 * (1.0 - fx)) as u8;
-            art.put_pixel(x, y, Rgba([r, g, b, 255]));
+            art.put_pixel(
+                x,
+                y,
+                color_oklch(0.28 + 0.42 * t, 0.14 + 0.06 * (1.0 - fy), hue + 28.0 * fx),
+            );
         }
     }
     encode_png(&art).expect("synthetic album art encodes")
@@ -1069,6 +1107,16 @@ mod tests {
     #[test]
     fn wraps_long_text_and_ellipsizes_only_when_needed() {
         let fonts = FontStack::load().unwrap();
+        for ch in "Alex Анна 山田荒城の月Подмосковные вечера Greensleeves".chars() {
+            if ch.is_whitespace() {
+                continue;
+            }
+            assert!(
+                FontStack::has(&fonts.regular, ch),
+                "Go Noto Kurrent missing {ch} (U+{:04X})",
+                ch as u32
+            );
+        }
         let short = wrap_lines(&fonts, 58.0, true, "Midnight City", 520, 3);
         assert_eq!(short, vec!["Midnight City".to_owned()]);
 
