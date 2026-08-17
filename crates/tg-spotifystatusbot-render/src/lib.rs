@@ -9,8 +9,8 @@ use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 
 use palette::{FromColor, OklabHue, Oklch, Srgb};
 
-pub const CARD_WIDTH: u32 = 1440;
-pub const CARD_HEIGHT: u32 = 552;
+pub const CARD_WIDTH: u32 = 1200;
+pub const CARD_HEIGHT: u32 = 528;
 
 const FONT_REGULAR: &[u8] = include_bytes!("../assets/fonts/GoNotoCurrent-Regular.ttf");
 const FONT_BOLD: &[u8] = include_bytes!("../assets/fonts/GoNotoCurrent-Bold.ttf");
@@ -221,7 +221,7 @@ pub struct RenderOptions {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-#[default(pad_x: 44, pad_top: 44, pad_bottom: 44, radius: 18, gap: 40, header: 56, header_gap: 36, art: 372)]
+#[default(pad_x: 40, pad_top: 40, pad_bottom: 40, radius: 18, gap: 36, header: 56, header_gap: 32, art: 360)]
 struct Layout {
     pad_x: i32,
     pad_top: i32,
@@ -313,22 +313,9 @@ pub fn render_card_with(kind: &CardKind, options: &RenderOptions) -> Result<Rgba
                 layout.pad_top,
                 options.width as i32 - layout.pad_x * 2,
             );
-            let album_size = 40u32;
-            let gap_meta = 8i32;
-            let fit = fit_text_lines(
-                &fonts,
-                title,
-                artist,
-                max_w,
-                (controls_top - art_top - line_height(album_size) - gap_meta * 2).max(line_height(54)),
-            );
-            let album_lines = wrap_lines(&fonts, album_size as f32, false, album, max_w, 2).len();
-            let stack_h = fit.title_lines as i32 * line_height(fit.title_size)
-                + gap_meta
-                + fit.artist_lines as i32 * line_height(fit.artist_size)
-                + gap_meta
-                + album_lines as i32 * line_height(album_size);
-            let mut y = art_top + ((controls_top - art_top - stack_h).max(0) / 2);
+            let budget = (controls_top - art_top).max(0);
+            let fit = fit_playing_stack(&fonts, title, artist, album, max_w, budget);
+            let mut y = art_top + ((budget - fit.height()).max(0) / 2);
             y = draw_text_block(
                 &mut img,
                 &fonts,
@@ -341,7 +328,7 @@ pub fn render_card_with(kind: &CardKind, options: &RenderOptions) -> Result<Rgba
                 max_w,
                 fit.title_lines,
             );
-            y += gap_meta;
+            y += META_GAP;
             y = draw_text_block(
                 &mut img,
                 &fonts,
@@ -354,7 +341,7 @@ pub fn render_card_with(kind: &CardKind, options: &RenderOptions) -> Result<Rgba
                 max_w,
                 fit.artist_lines,
             );
-            y += gap_meta;
+            y += META_GAP;
             draw_text_block(
                 &mut img,
                 &fonts,
@@ -363,9 +350,9 @@ pub fn render_card_with(kind: &CardKind, options: &RenderOptions) -> Result<Rgba
                 theme().faint,
                 x,
                 y,
-                album_size,
+                fit.album_size,
                 max_w,
-                2,
+                fit.album_lines,
             );
             draw_progress(
                 &mut img,
@@ -445,13 +432,7 @@ pub fn example_playing_card() -> CardKind {
 }
 
 pub fn example_card_ja() -> CardKind {
-    example_card(
-        "山田",
-        "荒城の月",
-        "瀧廉太郎",
-        "日本の歌曲",
-        264.0,
-    )
+    example_card("山田", "荒城の月", "瀧廉太郎", "日本の歌曲", 264.0)
 }
 
 pub fn example_card_ru() -> CardKind {
@@ -474,13 +455,17 @@ pub fn example_card_en() -> CardKind {
     )
 }
 
-fn example_card(
-    username: &str,
-    title: &str,
-    artist: &str,
-    album: &str,
-    art_hue: f32,
-) -> CardKind {
+pub fn example_card_lorem() -> CardKind {
+    example_card(
+        "lorem",
+        "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua",
+        "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat",
+        "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur",
+        200.0,
+    )
+}
+
+fn example_card(username: &str, title: &str, artist: &str, album: &str, art_hue: f32) -> CardKind {
     CardKind::Playing {
         username: CompactString::from(username),
         title: CompactString::from(title),
@@ -633,6 +618,8 @@ fn rounded_alpha(x: f32, y: f32, w: f32, h: f32, radius: f32) -> f32 {
 
 const CONTROL_H: i32 = 76;
 const BAR_H: u32 = 12;
+const META_GAP: i32 = 10;
+const ELLIPSIS: &str = "…";
 
 fn line_height(size: u32) -> i32 {
     (size as f32 * 1.16).round() as i32
@@ -641,53 +628,93 @@ fn line_height(size: u32) -> i32 {
 struct FittedText {
     title_size: u32,
     artist_size: u32,
+    album_size: u32,
     title_lines: usize,
     artist_lines: usize,
+    album_lines: usize,
 }
 
-fn fit_text_lines(
+impl FittedText {
+    fn height(&self) -> i32 {
+        self.title_lines as i32 * line_height(self.title_size)
+            + META_GAP
+            + self.artist_lines as i32 * line_height(self.artist_size)
+            + META_GAP
+            + self.album_lines as i32 * line_height(self.album_size)
+    }
+}
+
+fn needed_lines(
+    fonts: &FontStack<'_>,
+    size: u32,
+    bold: bool,
+    text: &str,
+    max_width: i32,
+    cap: usize,
+) -> usize {
+    wrap_lines(fonts, size as f32, bold, text, max_width, cap)
+        .len()
+        .max(1)
+}
+
+fn fit_playing_stack(
     fonts: &FontStack<'_>,
     title: &str,
     artist: &str,
+    album: &str,
     max_width: i32,
-    available: i32,
+    budget: i32,
 ) -> FittedText {
-    let mut title_size = 72u32;
-    let mut artist_size = 44u32;
-    loop {
-        let title_h = line_height(title_size);
-        let artist_h = line_height(artist_size);
-        let title_need = wrap_lines(fonts, title_size as f32, true, title, max_width, 12)
-            .len()
-            .max(1);
-        let artist_need = wrap_lines(fonts, artist_size as f32, false, artist, max_width, 8)
-            .len()
-            .max(1);
-        if title_need as i32 * title_h + artist_need as i32 * artist_h <= available {
-            return FittedText {
-                title_size,
-                artist_size,
-                title_lines: title_need,
-                artist_lines: artist_need,
-            };
-        }
-        if title_size > 54 {
-            title_size -= 2;
-            continue;
-        }
-        if artist_size > 34 {
+    const ALBUM_SIZE: u32 = 42;
+    let mut best: Option<FittedText> = None;
+    let mut best_key = (0u32, 0u32, 0u32, 0u32, 0u32);
+    let mut title_size = 84u32;
+    while title_size >= 64 {
+        let mut artist_size = 50u32;
+        while artist_size >= 40 {
+            let title_need = needed_lines(fonts, title_size, true, title, max_width, 3);
+            let artist_need = needed_lines(fonts, artist_size, false, artist, max_width, 2);
+            let album_need = needed_lines(fonts, ALBUM_SIZE, false, album, max_width, 2);
+            for title_lines in 1..=title_need {
+                for artist_lines in 1..=artist_need {
+                    for album_lines in 1..=album_need {
+                        let fit = FittedText {
+                            title_size,
+                            artist_size,
+                            album_size: ALBUM_SIZE,
+                            title_lines,
+                            artist_lines,
+                            album_lines,
+                        };
+                        if fit.height() > budget {
+                            continue;
+                        }
+                        let key = (
+                            title_lines as u32,
+                            title_size,
+                            artist_lines as u32,
+                            artist_size,
+                            album_lines as u32,
+                        );
+                        if best.is_none() || key > best_key {
+                            best_key = key;
+                            best = Some(fit);
+                        }
+                    }
+                }
+            }
             artist_size -= 2;
-            continue;
         }
-        let artist_lines = artist_need.clamp(1, 2);
-        let title_lines = ((available - artist_lines as i32 * artist_h) / title_h).max(1) as usize;
-        return FittedText {
-            title_size,
-            artist_size,
-            title_lines,
-            artist_lines,
-        };
+        title_size -= 2;
     }
+    best.unwrap_or(FittedText {
+        title_size: 64,
+        artist_size: 40,
+        album_size: ALBUM_SIZE,
+        title_lines: 1,
+        artist_lines: 1,
+        album_lines: 1,
+    })
 }
 
 fn draw_status_watermark(
@@ -697,8 +724,8 @@ fn draw_status_watermark(
     width: u32,
     height: u32,
 ) {
-    let size = height as f32 * 0.96;
-    let cx = width as f32 - size * 0.42;
+    let size = height as f32 * 0.94;
+    let cx = width as f32 - size * 0.38;
     let cy = height as f32 * 0.58;
     if is_playing {
         draw_play_mark(img, cx, cy, size, accent, 0.055);
@@ -1036,15 +1063,18 @@ fn ellipsize(fonts: &FontStack<'_>, size: f32, bold: bool, text: &str, max_width
     if fonts.measure(text, size, bold) <= max_width {
         return text.to_owned();
     }
-    let mut candidate = text.to_owned();
+    let mut candidate = text.trim_end().to_owned();
     while !candidate.is_empty() {
         candidate.pop();
-        let with_ellipsis = format!("{candidate}...");
+        while candidate.ends_with(|ch: char| ch.is_whitespace() || is_format_char(ch)) {
+            candidate.pop();
+        }
+        let with_ellipsis = format!("{candidate}{ELLIPSIS}");
         if fonts.measure(&with_ellipsis, size, bold) <= max_width {
             return with_ellipsis;
         }
     }
-    "...".into()
+    ELLIPSIS.into()
 }
 
 fn blend(img: &mut RgbaImage, x: i32, y: i32, color: Rgba<u8>, alpha: f32) {
@@ -1112,6 +1142,8 @@ mod tests {
         })
         .unwrap();
         assert_eq!(long.dimensions(), (CARD_WIDTH, CARD_HEIGHT));
+        let lorem = render_card(&example_card_lorem()).unwrap();
+        assert_eq!(lorem.dimensions(), (CARD_WIDTH, CARD_HEIGHT));
     }
 
     #[test]
@@ -1146,7 +1178,7 @@ mod tests {
             3,
         );
         assert!(wrapped.len() >= 2);
-        assert!(wrapped.iter().all(|line| !line.ends_with("...")));
+        assert!(wrapped.iter().all(|line| !line.ends_with(ELLIPSIS)));
 
         let overflow = wrap_lines(
             &fonts,
@@ -1157,11 +1189,56 @@ mod tests {
             2,
         );
         assert_eq!(overflow.len(), 2);
-        assert!(overflow.last().unwrap().ends_with("..."));
+        let last = overflow.last().unwrap();
+        assert!(last.ends_with(ELLIPSIS), "{last}");
+        assert!(fonts.measure(last, 58.0, true) <= 280);
+
+        let huge_word = wrap_lines(
+            &fonts,
+            64.0,
+            true,
+            "SupercalifragilisticexpialidociousWonderful",
+            160,
+            1,
+        );
+        assert_eq!(huge_word.len(), 1);
+        assert!(huge_word[0].ends_with(ELLIPSIS));
+        assert!(fonts.measure(&huge_word[0], 64.0, true) <= 160);
 
         let cjk = wrap_lines(&fonts, 58.0, true, "荒城の月は春の夜に", 120, 4);
         assert!(cjk.len() >= 2);
         assert!(cjk.iter().any(|line| line.contains('月')));
+    }
+
+    #[test]
+    fn playing_stack_stays_above_seekbar() {
+        let fonts = FontStack::load().unwrap();
+        let layout = Layout::default();
+        let max_w = layout.text_width(CARD_WIDTH, CARD_HEIGHT);
+        let art_top = layout.art_origin(CARD_HEIGHT).1;
+        let controls_top = layout
+            .content_bottom(CARD_HEIGHT)
+            .min(art_top + layout.art(CARD_HEIGHT) as i32)
+            - CONTROL_H;
+        let budget = controls_top - art_top;
+        let fit = fit_playing_stack(
+            &fonts,
+            "The Last Great American Dynasty Of The Late Twentieth Century And Then Some Extra Words",
+            "Taylor Swift, Bon Iver, The National, Phoebe Bridgers, and Many More Collaborators",
+            "Folklore: The Long Pond Studio Sessions Deluxe Edition With Extra Notes",
+            max_w,
+            budget,
+        );
+        assert!(fit.height() <= budget, "{} > {budget}", fit.height());
+        assert!(fit.title_lines >= 1 && fit.artist_lines >= 1 && fit.album_lines >= 1);
+        for (text, size, bold, lines) in [
+            ("The Last Great American Dynasty Of The Late Twentieth Century And Then Some Extra Words", fit.title_size, true, fit.title_lines),
+            ("Taylor Swift, Bon Iver, The National, Phoebe Bridgers, and Many More Collaborators", fit.artist_size, false, fit.artist_lines),
+            ("Folklore: The Long Pond Studio Sessions Deluxe Edition With Extra Notes", fit.album_size, false, fit.album_lines),
+        ] {
+            let wrapped = wrap_lines(&fonts, size as f32, bold, text, max_w, lines);
+            assert!(wrapped.iter().all(|line| fonts.measure(line, size as f32, bold) <= max_w));
+        }
     }
 
     #[test]

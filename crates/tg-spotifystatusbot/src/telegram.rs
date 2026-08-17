@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::render::render_jpeg;
 use compact_str::{format_compact, CompactString};
 use frankenstein::client_reqwest::Bot;
 use frankenstein::inline_mode::{InlineQueryResult, InlineQueryResultPhoto};
@@ -16,7 +17,6 @@ use frankenstein::types::{
 use frankenstein::updates::UpdateContent;
 use frankenstein::AsyncTelegramApi;
 use smallvec::SmallVec;
-use crate::render::render_jpeg;
 use uuid::Uuid;
 
 use crate::card_url::card_path;

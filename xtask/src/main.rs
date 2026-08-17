@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use tg_spotifystatusbot_render::{
-    encode_png, example_card_en, example_card_ja, example_card_ru, render_card, CardKind,
+    encode_png, example_card_en, example_card_ja, example_card_lorem, example_card_ru, render_card,
+    CardKind,
 };
 
 fn main() -> ExitCode {
@@ -31,9 +32,10 @@ fn render_examples(dir: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error
     let dir = dir.unwrap_or_else(|| workspace_root().join("assets"));
     fs::create_dir_all(&dir)?;
     let cards = [
-        ("example-status.png", example_card_ja()),
+        ("example-status-jp.png", example_card_ja()),
         ("example-status-ru.png", example_card_ru()),
         ("example-status-en.png", example_card_en()),
+        ("example-status-lorem.png", example_card_lorem()),
     ];
     for (name, kind) in cards {
         write_card(&dir.join(name), &kind)?;

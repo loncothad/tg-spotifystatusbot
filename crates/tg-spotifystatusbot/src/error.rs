@@ -69,9 +69,7 @@ impl AppError {
     pub fn user_message(&self) -> &'static str {
         match self {
             Self::NotLinked => "Spotify isn't linked yet. Send /link to connect your account.",
-            Self::InvalidOauthState => {
-                "That Spotify login link expired. Send /link and try again."
-            }
+            Self::InvalidOauthState => "That Spotify login link expired. Send /link and try again.",
             Self::Spotify(detail) => spotify_user_message(detail),
             Self::InvalidCardUrl => "That status image link is invalid or expired.",
             Self::Telegram(_) => "Telegram rejected the request. Try again in a moment.",

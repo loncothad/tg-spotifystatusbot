@@ -202,7 +202,11 @@ fn hydrate(
     Ok(())
 }
 
-fn persist_user(db: &Database, telegram_user_id: u64, tokens: Option<&SpotifyTokens>) -> Result<bool> {
+fn persist_user(
+    db: &Database,
+    telegram_user_id: u64,
+    tokens: Option<&SpotifyTokens>,
+) -> Result<bool> {
     let bytes = tokens.map(serde_json::to_vec).transpose()?;
     let txn = db.begin_write().map_err(AppError::database)?;
     let existed = {
@@ -236,10 +240,7 @@ fn persist_oauth(db: &Database, state: &str, value: Option<&OauthState>) -> Resu
                     .map_err(AppError::database)?;
                 true
             }
-            None => table
-                .remove(state)
-                .map_err(AppError::database)?
-                .is_some(),
+            None => table.remove(state).map_err(AppError::database)?.is_some(),
         }
     };
     txn.commit().map_err(AppError::database)?;
@@ -255,9 +256,7 @@ fn persist_allow(db: &Database, telegram_user_id: u64, insert: bool) -> Result<(
                 .insert(telegram_user_id, 1u8)
                 .map_err(AppError::database)?;
         } else {
-            table
-                .remove(telegram_user_id)
-                .map_err(AppError::database)?;
+            table.remove(telegram_user_id).map_err(AppError::database)?;
         }
     }
     txn.commit().map_err(AppError::database)?;
@@ -375,10 +374,7 @@ mod tests {
         let path = dir.path().join("bot.redb");
         {
             let store = Store::open(&path).unwrap();
-            store
-                .put_tokens(1, &tokens("a", "r", 1))
-                .await
-                .unwrap();
+            store.put_tokens(1, &tokens("a", "r", 1)).await.unwrap();
             store.allow_user(9).await.unwrap();
         }
         let store = Store::open(&path).unwrap();

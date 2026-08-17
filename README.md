@@ -4,11 +4,13 @@ Inline Telegram bot that OAuth-links each user's Spotify account and **always fr
 
 CJK (Japanese), Cyrillic (Russian), and Latin (English):
 
-![Japanese now-playing card](assets/example-status.png)
+![Japanese now-playing card](assets/example-status-jp.png)
 
 ![Russian now-playing card](assets/example-status-ru.png)
 
 ![English now-playing card](assets/example-status-en.png)
+
+![Long-text now-playing card](assets/example-status-lorem.png)
 
 These are produced by the renderer crate via `just render-example` (`cargo xtask render-example`).
 
@@ -30,7 +32,7 @@ These are produced by the renderer crate via `just render-example` (`cargo xtask
 | --- | --- |
 | `crates/tg-spotifystatusbot` | Frankenstein bot, OAuth HTTP server, redb, Spotify client |
 | `crates/tg-spotifystatusbot-render` | Now-playing card renderer (used by the bot **and** xtask) |
-| `xtask` | `cargo xtask render-example` writes `assets/example-status.png` |
+| `xtask` | `cargo xtask render-example` writes `assets/example-status-{jp,ru,en,lorem}.png` |
 
 IDs that we generate (OAuth `state`, inline result ids, temp filenames) are **UUIDv7**.
 
@@ -76,7 +78,7 @@ just build            # workspace debug build
 just release          # release bot binary
 just test             # cargo test --workspace
 just run              # cargo run -p tg-spotifystatusbot
-just render-example   # write assets/example-status.png
+just render-example   # write assets/example-status-{jp,ru,en,lorem}.png
 just clippy
 just fmt
 just docker           # docker compose build

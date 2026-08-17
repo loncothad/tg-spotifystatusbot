@@ -150,9 +150,7 @@ impl SpotifyClient {
     ) -> Result<u64> {
         let oauth = store.take_oauth_state(state, ttl_secs).await?;
         let tokens = self.exchange_code(code, &oauth.code_verifier).await?;
-        store
-            .put_tokens(oauth.telegram_user_id, &tokens)
-            .await?;
+        store.put_tokens(oauth.telegram_user_id, &tokens).await?;
         Ok(oauth.telegram_user_id)
     }
 
@@ -368,9 +366,7 @@ fn spotify_http_error(status: reqwest::StatusCode, body: &str) -> AppError {
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum ApiErrorBody {
-        Object {
-            message: Option<CompactString>,
-        },
+        Object { message: Option<CompactString> },
         Code(CompactString),
     }
     let parsed = serde_json::from_str::<ApiError>(body).ok();
