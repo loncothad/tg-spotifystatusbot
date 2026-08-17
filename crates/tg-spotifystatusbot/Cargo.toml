@@ -1,0 +1,37 @@
+[package]
+name = "tg-spotifystatusbot"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Inline Telegram bot that renders a live Spotify now-playing card"
+
+[dependencies]
+axum = "0.8"
+base64 = "0.22"
+better_default.workspace = true
+compact_str.workspace = true
+derive_more.workspace = true
+frankenstein = { version = "0.50", features = ["client-reqwest"] }
+hex = "0.4"
+hmac = "0.12"
+rand = "0.8"
+rayon = "1.10"
+redb = "2.6"
+scc = "3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+smallvec.workspace = true
+sha2 = "0.10"
+tg-spotifystatusbot-render.workspace = true
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+url = "2"
+urlencoding = "2"
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

@@ -1,0 +1,7 @@
+/target
+/data
+.env
+*.redb
+*.redb.*
+.idea
+.vscode

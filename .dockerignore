@@ -1,0 +1,8 @@
+/target
+/data
+/.git
+/.github
+/.pi
+/.env
+*.redb
+assets/example-status.png

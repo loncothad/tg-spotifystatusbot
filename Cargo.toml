@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tg-spotifystatusbot",
+    "crates/tg-spotifystatusbot-render",
+    "xtask",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+ab_glyph = "0.2"
+better_default = "1"
+derive_more = { version = "2", features = ["display", "error", "from"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+imageproc = "0.25"
+compact_str = { version = "0.9", features = ["serde"] }
+smallvec = { version = "1", features = ["serde", "union"] }
+tg-spotifystatusbot-render = { path = "crates/tg-spotifystatusbot-render" }
+uuid = { version = "1", features = ["v7"] }

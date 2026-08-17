@@ -1,0 +1,22 @@
+services:
+  bot:
+    build: .
+    image: tg-spotifystatusbot:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDB_PATH: /var/lib/tg-spotifystatusbot/bot.redb
+      HTTP_BIND: 0.0.0.0:8080
+    ports:
+      - "${HTTP_PUBLISH_PORT:-8080}:8080"
+    volumes:
+      - bot-data:/var/lib/tg-spotifystatusbot
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  bot-data:

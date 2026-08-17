@@ -1,0 +1,1110 @@
+use std::io::Cursor;
+
+use ab_glyph::{point, Font, FontRef, PxScale, ScaleFont};
+use better_default::Default;
+use compact_str::{format_compact, CompactString};
+use derive_more::{Display, Error};
+use image::imageops::FilterType;
+use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+
+use palette::{FromColor, OklabHue, Oklch, Srgb};
+
+pub const CARD_WIDTH: u32 = 1320;
+pub const CARD_HEIGHT: u32 = 504;
+
+const FONT_REGULAR: &[u8] = include_bytes!("../assets/fonts/DroidSans.ttf");
+const FONT_BOLD: &[u8] = include_bytes!("../assets/fonts/DroidSans-Bold.ttf");
+const FONT_EXTENDED: &[u8] = include_bytes!("../assets/fonts/NotoSans.ttf");
+const FONT_CJK: &[u8] = include_bytes!("../assets/fonts/DroidSansFallbackFull.ttf");
+
+struct FontStack<'a> {
+    latin_regular: FontRef<'a>,
+    latin_bold: FontRef<'a>,
+    extended: FontRef<'a>,
+    cjk: FontRef<'a>,
+}
+
+impl FontStack<'static> {
+    fn load() -> Result<Self> {
+        Ok(Self {
+            latin_regular: FontRef::try_from_slice(FONT_REGULAR).map_err(|_| RenderError::Font)?,
+            latin_bold: FontRef::try_from_slice(FONT_BOLD).map_err(|_| RenderError::Font)?,
+            extended: FontRef::try_from_slice(FONT_EXTENDED).map_err(|_| RenderError::Font)?,
+            cjk: FontRef::try_from_slice(FONT_CJK).map_err(|_| RenderError::Font)?,
+        })
+    }
+}
+
+impl FontStack<'_> {
+    fn has(font: &FontRef<'_>, ch: char) -> bool {
+        font.glyph_id(ch).0 != 0
+    }
+
+    fn pick(&self, ch: char, bold: bool) -> &FontRef<'_> {
+        let primary = if bold {
+            &self.latin_bold
+        } else {
+            &self.latin_regular
+        };
+        if Self::has(primary, ch) {
+            return primary;
+        }
+        if Self::has(&self.extended, ch) {
+            return &self.extended;
+        }
+        if Self::has(&self.cjk, ch) {
+            return &self.cjk;
+        }
+        primary
+    }
+
+    fn measure(&self, text: &str, size: f32, bold: bool) -> i32 {
+        let scale = PxScale::from(size);
+        let mut width = 0.0f32;
+        for ch in text.chars() {
+            let font = self.pick(ch, bold);
+            width += font.as_scaled(scale).h_advance(font.glyph_id(ch));
+        }
+        width.ceil() as i32
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw(
+        &self,
+        img: &mut RgbaImage,
+        color: Rgba<u8>,
+        x: i32,
+        y: i32,
+        size: f32,
+        bold: bool,
+        text: &str,
+    ) {
+        let scale = PxScale::from(size);
+        let primary = if bold {
+            &self.latin_bold
+        } else {
+            &self.latin_regular
+        };
+        let ascent = primary.as_scaled(scale).ascent();
+        let mut caret = x as f32;
+        for ch in text.chars() {
+            let font = self.pick(ch, bold);
+            let scaled = font.as_scaled(scale);
+            let id = font.glyph_id(ch);
+            let glyph = id.with_scale_and_position(scale, point(caret, y as f32 + ascent));
+            if let Some(outlined) = font.outline_glyph(glyph) {
+                let bounds = outlined.px_bounds();
+                outlined.draw(|px, py, coverage| {
+                    if coverage > 0.0 {
+                        blend(
+                            img,
+                            bounds.min.x as i32 + px as i32,
+                            bounds.min.y as i32 + py as i32,
+                            color,
+                            coverage,
+                        );
+                    }
+                });
+            }
+            caret += scaled.h_advance(id);
+        }
+    }
+}
+
+fn color_oklch(l: f32, chroma: f32, hue: f32) -> Rgba<u8> {
+    let srgb = Srgb::<f32>::from_color(Oklch::new(l, chroma, OklabHue::from_degrees(hue)));
+    let srgb = srgb.into_format::<u8>();
+    Rgba([srgb.red, srgb.green, srgb.blue, 255])
+}
+
+fn oklch_from_rgba(color: Rgba<u8>) -> Oklch {
+    Oklch::from_color(Srgb::new(color[0], color[1], color[2]).into_format::<f32>())
+}
+
+fn rgba_from_oklch(color: Oklch) -> Rgba<u8> {
+    let srgb = Srgb::<f32>::from_color(color).into_format::<u8>();
+    Rgba([srgb.red, srgb.green, srgb.blue, 255])
+}
+
+struct Theme {
+    bg: Rgba<u8>,
+    white: Rgba<u8>,
+    muted: Rgba<u8>,
+    faint: Rgba<u8>,
+    track: Rgba<u8>,
+    art_fallback: Rgba<u8>,
+    default_accent: Rgba<u8>,
+}
+
+impl Theme {
+    fn new() -> Self {
+        Self {
+            bg: color_oklch(0.13, 0.008, 264.0),
+            white: color_oklch(0.985, 0.0, 0.0),
+            muted: color_oklch(0.76, 0.012, 264.0),
+            faint: color_oklch(0.62, 0.014, 264.0),
+            track: color_oklch(0.41, 0.01, 264.0),
+            art_fallback: color_oklch(0.23, 0.01, 264.0),
+            default_accent: color_oklch(0.78, 0.18, 145.0),
+        }
+    }
+}
+
+fn theme() -> &'static Theme {
+    static THEME: std::sync::LazyLock<Theme> = std::sync::LazyLock::new(Theme::new);
+    &THEME
+}
+
+#[derive(Debug, Display, Error)]
+pub enum RenderError {
+    #[display("Invalid font data")]
+    Font,
+    #[display("Failed to encode image: {_0}")]
+    Encode(#[error(not(source))] String),
+}
+
+pub type Result<T> = std::result::Result<T, RenderError>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CardKind {
+    Playing {
+        username: CompactString,
+        title: CompactString,
+        artist: CompactString,
+        album: CompactString,
+        progress_ms: u32,
+        duration_ms: u32,
+        is_playing: bool,
+        album_art: Option<Vec<u8>>,
+        avatar: Option<Vec<u8>>,
+        track_url: Option<CompactString>,
+    },
+    Idle,
+    NotLinked,
+    Error {
+        message: CompactString,
+    },
+}
+
+impl CardKind {
+    fn album_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Playing { album_art, .. } => album_art.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn track_url(&self) -> Option<&str> {
+        match self {
+            Self::Playing { track_url, .. } => track_url.as_deref(),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+#[default(width: CARD_WIDTH, height: CARD_HEIGHT, jpeg_quality: 90)]
+pub struct RenderOptions {
+    pub width: u32,
+    pub height: u32,
+    pub jpeg_quality: u8,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+#[default(pad_x: 40, pad_top: 40, pad_bottom: 40, radius: 16, gap: 36, header: 52, header_gap: 32, art: 340)]
+struct Layout {
+    pad_x: i32,
+    pad_top: i32,
+    pad_bottom: i32,
+    radius: u32,
+    gap: i32,
+    header: i32,
+    header_gap: i32,
+    art: u32,
+}
+
+impl Layout {
+    fn art(&self, _height: u32) -> u32 {
+        self.art
+    }
+
+    fn art_origin(&self, _height: u32) -> (i32, i32) {
+        (self.pad_x, self.pad_top + self.header + self.header_gap)
+    }
+
+    fn text_x(&self, height: u32) -> i32 {
+        self.pad_x + self.art(height) as i32 + self.gap
+    }
+
+    fn text_right(&self, width: u32) -> i32 {
+        width as i32 - self.pad_x
+    }
+
+    fn text_width(&self, width: u32, height: u32) -> i32 {
+        self.text_right(width) - self.text_x(height)
+    }
+
+    fn content_bottom(&self, height: u32) -> i32 {
+        height as i32 - self.pad_bottom
+    }
+}
+
+struct Palette {
+    accent: Rgba<u8>,
+}
+
+pub fn render_card(kind: &CardKind) -> Result<RgbaImage> {
+    render_card_with(kind, &RenderOptions::default())
+}
+
+pub fn render_card_with(kind: &CardKind, options: &RenderOptions) -> Result<RgbaImage> {
+    let fonts = FontStack::load()?;
+    let layout = Layout::default();
+    let art_size = layout.art(options.height);
+    let art = decode_art(kind.album_bytes(), art_size);
+    let palette = palette_from(art.as_ref());
+
+    let mut img = RgbaImage::from_pixel(options.width, options.height, theme().bg);
+    wash_background(&mut img, palette.accent);
+    blit_cover(&mut img, art.as_ref(), &layout, art_size);
+
+    let x = layout.text_x(options.height);
+    let max_w = layout.text_width(options.width, options.height);
+    let (_art_x, art_top) = layout.art_origin(options.height);
+    let art_bottom = art_top + art_size as i32;
+    let controls_y = layout.content_bottom(options.height).min(art_bottom);
+    let controls_top = controls_y - CONTROL_H;
+
+    match kind {
+        CardKind::Playing {
+            username,
+            avatar,
+            title,
+            artist,
+            album,
+            progress_ms,
+            duration_ms,
+            is_playing,
+            ..
+        } => {
+            draw_status_watermark(
+                &mut img,
+                *is_playing,
+                palette.accent,
+                options.width,
+                options.height,
+            );
+            draw_listener_line(
+                &mut img,
+                &fonts,
+                username,
+                avatar.as_deref(),
+                layout.pad_x,
+                layout.pad_top,
+                options.width as i32 - layout.pad_x * 2,
+            );
+            let album_size = 36u32;
+            let gap_meta = 8i32;
+            let fit = fit_text_lines(
+                &fonts,
+                title,
+                artist,
+                max_w,
+                (controls_top - art_top - line_height(album_size) - gap_meta * 2).max(line_height(54)),
+            );
+            let album_lines = wrap_lines(&fonts, album_size as f32, false, album, max_w, 2).len();
+            let stack_h = fit.title_lines as i32 * line_height(fit.title_size)
+                + gap_meta
+                + fit.artist_lines as i32 * line_height(fit.artist_size)
+                + gap_meta
+                + album_lines as i32 * line_height(album_size);
+            let mut y = art_top + ((controls_top - art_top - stack_h).max(0) / 2);
+            y = draw_text_block(
+                &mut img,
+                &fonts,
+                true,
+                title,
+                theme().white,
+                x,
+                y,
+                fit.title_size,
+                max_w,
+                fit.title_lines,
+            );
+            y += gap_meta;
+            y = draw_text_block(
+                &mut img,
+                &fonts,
+                false,
+                artist,
+                theme().muted,
+                x,
+                y,
+                fit.artist_size,
+                max_w,
+                fit.artist_lines,
+            );
+            y += gap_meta;
+            draw_text_block(
+                &mut img,
+                &fonts,
+                false,
+                album,
+                theme().faint,
+                x,
+                y,
+                album_size,
+                max_w,
+                2,
+            );
+            draw_progress(
+                &mut img,
+                &fonts,
+                *progress_ms,
+                *duration_ms,
+                palette.accent,
+                x,
+                controls_y,
+                max_w,
+            );
+        }
+        CardKind::Idle => {
+            draw_status_copy(
+                &mut img,
+                &fonts,
+                palette.accent,
+                "SPOTIFY",
+                "Nothing playing",
+                "Start a track in Spotify, then try again.",
+                x,
+                art_top,
+                max_w,
+            );
+        }
+        CardKind::NotLinked => {
+            draw_status_copy(
+                &mut img,
+                &fonts,
+                palette.accent,
+                "SPOTIFY",
+                "Spotify isn't linked",
+                "Open the bot and send /link to connect.",
+                x,
+                art_top,
+                max_w,
+            );
+        }
+        CardKind::Error { message } => {
+            draw_status_copy(
+                &mut img,
+                &fonts,
+                palette.accent,
+                "STATUS",
+                "Can't load playback",
+                message,
+                x,
+                art_top,
+                max_w,
+            );
+        }
+    }
+
+    Ok(img)
+}
+
+pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>> {
+    let mut out = Cursor::new(Vec::new());
+    image
+        .write_to(&mut out, ImageFormat::Png)
+        .map_err(|err| RenderError::Encode(err.to_string()))?;
+    Ok(out.into_inner())
+}
+
+pub fn encode_jpeg(image: &RgbaImage, quality: u8) -> Result<Vec<u8>> {
+    let rgb = DynamicImage::ImageRgba8(image.clone()).to_rgb8();
+    let mut out = Cursor::new(Vec::new());
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality);
+    encoder
+        .encode_image(&rgb)
+        .map_err(|err| RenderError::Encode(err.to_string()))?;
+    Ok(out.into_inner())
+}
+
+pub fn example_playing_card() -> CardKind {
+    CardKind::Playing {
+        username: CompactString::from("山田"),
+        title: CompactString::from("荒城の月"),
+        artist: CompactString::from("瀧廉太郎"),
+        album: CompactString::from("日本の歌曲"),
+        progress_ms: 83_000,
+        duration_ms: 243_000,
+        is_playing: true,
+        album_art: Some(synthetic_album_art()),
+        avatar: Some(synthetic_avatar()),
+        track_url: Some(CompactString::from(
+            "https://open.spotify.com/track/example",
+        )),
+    }
+}
+
+pub fn synthetic_album_art() -> Vec<u8> {
+    let mut art = RgbaImage::new(256, 256);
+    for y in 0..256 {
+        for x in 0..256 {
+            let fx = x as f32 / 255.0;
+            let fy = y as f32 / 255.0;
+            let t = (fx * 0.55 + fy * 0.45).clamp(0.0, 1.0);
+            let r = (24.0 + 170.0 * t) as u8;
+            let g = (36.0 + 55.0 * (1.0 - t) + 50.0 * fy) as u8;
+            let b = (88.0 + 130.0 * (1.0 - fx)) as u8;
+            art.put_pixel(x, y, Rgba([r, g, b, 255]));
+        }
+    }
+    encode_png(&art).expect("synthetic album art encodes")
+}
+
+pub fn synthetic_avatar() -> Vec<u8> {
+    let mut art = RgbaImage::new(64, 64);
+    for y in 0..64 {
+        for x in 0..64 {
+            let fx = x as f32 / 63.0;
+            let fy = y as f32 / 63.0;
+            art.put_pixel(x, y, color_oklch(0.62 + 0.18 * fx, 0.12, 250.0 + 40.0 * fy));
+        }
+    }
+    encode_png(&art).expect("synthetic avatar encodes")
+}
+
+fn decode_art(bytes: Option<&[u8]>, size: u32) -> Option<RgbaImage> {
+    let bytes = bytes?;
+    let decoded = image::load_from_memory(bytes).ok()?;
+    Some(
+        decoded
+            .resize_to_fill(size, size, FilterType::Lanczos3)
+            .to_rgba8(),
+    )
+}
+
+fn palette_from(art: Option<&RgbaImage>) -> Palette {
+    Palette {
+        accent: art.map(accent_from).unwrap_or(theme().default_accent),
+    }
+}
+
+fn accent_from(art: &RgbaImage) -> Rgba<u8> {
+    let mut best = theme().default_accent;
+    let mut best_score = 0.0f32;
+    let step = (art.width().max(8) / 8).max(1);
+    for y in (0..art.height()).step_by(step as usize) {
+        for x in (0..art.width()).step_by(step as usize) {
+            let [r, g, b, _] = art.get_pixel(x, y).0;
+            let sample = oklch_from_rgba(Rgba([r, g, b, 255]));
+            let score = sample.chroma * (1.0 - (sample.l - 0.62).abs() * 1.15);
+            if score > best_score {
+                best_score = score;
+                best = rgba_from_oklch(Oklch::new(
+                    0.72,
+                    (sample.chroma * 0.65 + 0.07).min(0.2),
+                    sample.hue,
+                ));
+            }
+        }
+    }
+    if best_score < 0.04 {
+        theme().default_accent
+    } else {
+        best
+    }
+}
+
+fn wash_background(img: &mut RgbaImage, accent: Rgba<u8>) {
+    let width = img.width();
+    let height = img.height();
+    let bg = oklch_from_rgba(theme().bg);
+    let accent = oklch_from_rgba(accent);
+    for y in 0..height {
+        for x in 0..width {
+            let fx = x as f32 / width as f32;
+            let fy = y as f32 / height as f32;
+            let falloff = (1.0 - fx).powf(1.35) * (1.0 - (fy - 0.5).abs()) * 0.28;
+            let mixed = Oklch::new(
+                bg.l + (accent.l - bg.l) * falloff,
+                bg.chroma + (accent.chroma - bg.chroma) * falloff,
+                accent.hue,
+            );
+            img.put_pixel(x, y, rgba_from_oklch(mixed));
+        }
+    }
+}
+
+fn blit_cover(img: &mut RgbaImage, art: Option<&RgbaImage>, layout: &Layout, art_size: u32) {
+    let (x, y) = layout.art_origin(img.height());
+    let src = art
+        .cloned()
+        .unwrap_or_else(|| RgbaImage::from_pixel(art_size, art_size, theme().art_fallback));
+    blit_rounded(img, &src, x, y, layout.radius);
+}
+
+fn blit_rounded(dst: &mut RgbaImage, src: &RgbaImage, ox: i32, oy: i32, radius: u32) {
+    let w = src.width() as f32;
+    let h = src.height() as f32;
+    let r = radius as f32;
+    for py in 0..src.height() {
+        for px in 0..src.width() {
+            let alpha = rounded_alpha(px as f32 + 0.5, py as f32 + 0.5, w, h, r);
+            if alpha <= 0.0 {
+                continue;
+            }
+            let pixel = *src.get_pixel(px, py);
+            blend(
+                dst,
+                ox + px as i32,
+                oy + py as i32,
+                Rgba([pixel[0], pixel[1], pixel[2], 255]),
+                alpha * (f32::from(pixel[3]) / 255.0),
+            );
+        }
+    }
+}
+
+fn rounded_alpha(x: f32, y: f32, w: f32, h: f32, radius: f32) -> f32 {
+    let r = radius.min(w.min(h) / 2.0);
+    let qx = (x - w * 0.5).abs() - (w * 0.5 - r);
+    let qy = (y - h * 0.5).abs() - (h * 0.5 - r);
+    let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
+    let dist = qx.min(0.0).max(qy.min(0.0)) + outside - r;
+    (0.75 - dist).clamp(0.0, 1.0)
+}
+
+const CONTROL_H: i32 = 70;
+const BAR_H: u32 = 12;
+
+fn line_height(size: u32) -> i32 {
+    (size as f32 * 1.16).round() as i32
+}
+
+struct FittedText {
+    title_size: u32,
+    artist_size: u32,
+    title_lines: usize,
+    artist_lines: usize,
+}
+
+fn fit_text_lines(
+    fonts: &FontStack<'_>,
+    title: &str,
+    artist: &str,
+    max_width: i32,
+    available: i32,
+) -> FittedText {
+    let mut title_size = 72u32;
+    let mut artist_size = 44u32;
+    loop {
+        let title_h = line_height(title_size);
+        let artist_h = line_height(artist_size);
+        let title_need = wrap_lines(fonts, title_size as f32, true, title, max_width, 12)
+            .len()
+            .max(1);
+        let artist_need = wrap_lines(fonts, artist_size as f32, false, artist, max_width, 8)
+            .len()
+            .max(1);
+        if title_need as i32 * title_h + artist_need as i32 * artist_h <= available {
+            return FittedText {
+                title_size,
+                artist_size,
+                title_lines: title_need,
+                artist_lines: artist_need,
+            };
+        }
+        if title_size > 54 {
+            title_size -= 2;
+            continue;
+        }
+        if artist_size > 34 {
+            artist_size -= 2;
+            continue;
+        }
+        let artist_lines = artist_need.clamp(1, 2);
+        let title_lines = ((available - artist_lines as i32 * artist_h) / title_h).max(1) as usize;
+        return FittedText {
+            title_size,
+            artist_size,
+            title_lines,
+            artist_lines,
+        };
+    }
+}
+
+fn draw_status_watermark(
+    img: &mut RgbaImage,
+    is_playing: bool,
+    accent: Rgba<u8>,
+    width: u32,
+    height: u32,
+) {
+    let size = height as f32 * 0.96;
+    let cx = width as f32 - size * 0.42;
+    let cy = height as f32 * 0.58;
+    if is_playing {
+        draw_pause_mark(img, cx, cy, size, accent, 0.055);
+    } else {
+        draw_play_mark(img, cx, cy, size, accent, 0.055);
+    }
+}
+
+fn draw_pause_mark(img: &mut RgbaImage, cx: f32, cy: f32, size: f32, color: Rgba<u8>, alpha: f32) {
+    let bar_w = size * 0.18;
+    let bar_h = size * 0.78;
+    let gap = size * 0.16;
+    let y = (cy - bar_h / 2.0).round() as i32;
+    let h = bar_h.round() as u32;
+    let w = bar_w.round() as u32;
+    fill_rect_opacity(
+        img,
+        (cx - gap / 2.0 - bar_w).round() as i32,
+        y,
+        w,
+        h,
+        color,
+        alpha,
+    );
+    fill_rect_opacity(img, (cx + gap / 2.0).round() as i32, y, w, h, color, alpha);
+}
+
+fn draw_play_mark(img: &mut RgbaImage, cx: f32, cy: f32, size: f32, color: Rgba<u8>, alpha: f32) {
+    let left = cx - size * 0.30;
+    let right = cx + size * 0.40;
+    let top = cy - size * 0.40;
+    let bottom = cy + size * 0.40;
+    let min_x = left.floor() as i32;
+    let max_x = right.ceil() as i32;
+    let min_y = top.floor() as i32;
+    let max_y = bottom.ceil() as i32;
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let px = x as f32 + 0.5;
+            let py = y as f32 + 0.5;
+            let t = ((py - top) / (bottom - top)).clamp(0.0, 1.0);
+            let edge = left + (right - left) * (1.0 - (t * 2.0 - 1.0).abs());
+            if px >= left && px <= edge {
+                blend(img, x, y, color, alpha);
+            }
+        }
+    }
+}
+
+fn fill_rect_opacity(
+    img: &mut RgbaImage,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    color: Rgba<u8>,
+    alpha: f32,
+) {
+    for dy in 0..height {
+        for dx in 0..width {
+            blend(img, x + dx as i32, y + dy as i32, color, alpha);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_progress(
+    img: &mut RgbaImage,
+    fonts: &FontStack<'_>,
+    progress_ms: u32,
+    duration_ms: u32,
+    accent: Rgba<u8>,
+    x: i32,
+    y: i32,
+    width: i32,
+) {
+    let row_top = y - CONTROL_H;
+    let start = format_ms(progress_ms);
+    let end = format_ms(duration_ms);
+    let bar_x = x;
+    let bar_w = width.max(48) as u32;
+    let bar_y = row_top + 10;
+    fill_rect_opacity(img, bar_x, bar_y, bar_w, BAR_H, theme().track, 1.0);
+
+    let ratio = if duration_ms == 0 {
+        0.0
+    } else {
+        (progress_ms as f32 / duration_ms as f32).clamp(0.0, 1.0)
+    };
+    let filled = ((bar_w as f32) * ratio).round() as u32;
+    if filled > 0 {
+        fill_rect_opacity(img, bar_x, bar_y, filled, BAR_H, accent, 1.0);
+    }
+
+    let head_w = 14u32;
+    let head_h = 28u32;
+    let head_x = bar_x
+        + filled
+            .saturating_sub(head_w / 2)
+            .min(bar_w.saturating_sub(head_w)) as i32;
+    let head_y = bar_y - ((head_h as i32 - BAR_H as i32) / 2);
+    fill_rect_opacity(img, head_x, head_y, head_w, head_h, theme().white, 0.95);
+
+    let time_size = 34.0;
+    let end_w = fonts.measure(&end, time_size, false);
+    let text_y = bar_y + BAR_H as i32 + 14;
+    fonts.draw(img, theme().faint, x, text_y, time_size, false, &start);
+    fonts.draw(
+        img,
+        theme().faint,
+        x + width - end_w,
+        text_y,
+        time_size,
+        false,
+        &end,
+    );
+}
+
+const AVATAR_SIZE: u32 = 52;
+
+#[allow(clippy::too_many_arguments)]
+fn draw_listener_line(
+    img: &mut RgbaImage,
+    fonts: &FontStack<'_>,
+    username: &str,
+    avatar: Option<&[u8]>,
+    x: i32,
+    y: i32,
+    max_width: i32,
+) {
+    let size = 48.0;
+    blit_avatar(img, avatar, x, y, AVATAR_SIZE);
+    let text_x = x + AVATAR_SIZE as i32 + 14;
+    let text_y = y + (AVATAR_SIZE as i32 - size as i32) / 2;
+    let suffix = " is now playing";
+    let suffix_w = fonts.measure(suffix, size, false);
+    let name_budget = (max_width - AVATAR_SIZE as i32 - 14 - suffix_w).max(48);
+    let name = ellipsize(fonts, size, true, username, name_budget);
+    fonts.draw(img, theme().white, text_x, text_y, size, true, &name);
+    let name_w = fonts.measure(&name, size, true);
+    fonts.draw(
+        img,
+        theme().muted,
+        text_x + name_w,
+        text_y,
+        size,
+        false,
+        suffix,
+    );
+}
+
+fn blit_avatar(img: &mut RgbaImage, bytes: Option<&[u8]>, x: i32, y: i32, size: u32) {
+    let src = decode_art(bytes, size)
+        .unwrap_or_else(|| RgbaImage::from_pixel(size, size, theme().art_fallback));
+    blit_rounded(img, &src, x, y, size / 2);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_status_copy(
+    img: &mut RgbaImage,
+    fonts: &FontStack<'_>,
+    accent: Rgba<u8>,
+    label: &str,
+    title: &str,
+    body: &str,
+    x: i32,
+    y: i32,
+    max_w: i32,
+) {
+    let mut cursor = y + 24;
+    cursor = draw_text_block(img, fonts, true, label, accent, x, cursor, 28, max_w, 1);
+    cursor += 18;
+    cursor = draw_text_block(
+        img,
+        fonts,
+        true,
+        title,
+        theme().white,
+        x,
+        cursor,
+        52,
+        max_w,
+        3,
+    );
+    cursor += 14;
+    draw_text_block(
+        img,
+        fonts,
+        false,
+        body,
+        theme().muted,
+        x,
+        cursor,
+        28,
+        max_w,
+        3,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_text_block(
+    img: &mut RgbaImage,
+    fonts: &FontStack<'_>,
+    bold: bool,
+    text: &str,
+    color: Rgba<u8>,
+    x: i32,
+    y: i32,
+    size: u32,
+    max_width: i32,
+    max_lines: usize,
+) -> i32 {
+    let height = line_height(size);
+    let lines = wrap_lines(fonts, size as f32, bold, text, max_width, max_lines);
+    for (index, line) in lines.iter().enumerate() {
+        fonts.draw(
+            img,
+            color,
+            x,
+            y + index as i32 * height,
+            size as f32,
+            bold,
+            line,
+        );
+    }
+    y + lines.len() as i32 * height
+}
+
+fn is_cjk(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{3040}'..='\u{30ff}'
+            | '\u{3400}'..='\u{4dbf}'
+            | '\u{4e00}'..='\u{9fff}'
+            | '\u{f900}'..='\u{faff}'
+            | '\u{ac00}'..='\u{d7af}'
+    )
+}
+
+fn tokenize(text: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut buf = String::new();
+    for ch in text.chars() {
+        if is_cjk(ch) {
+            if !buf.is_empty() {
+                tokens.push(std::mem::take(&mut buf));
+            }
+            tokens.push(ch.to_string());
+        } else if ch.is_whitespace() {
+            if !buf.is_empty() {
+                tokens.push(std::mem::take(&mut buf));
+            }
+        } else {
+            buf.push(ch);
+        }
+    }
+    if !buf.is_empty() {
+        tokens.push(buf);
+    }
+    tokens
+}
+
+fn join_token(current: &str, token: &str) -> String {
+    if current.is_empty() {
+        return token.to_owned();
+    }
+    let prev = current.chars().last();
+    let next = token.chars().next();
+    if matches!((prev, next), (Some(a), Some(b)) if is_cjk(a) || is_cjk(b)) {
+        format!("{current}{token}")
+    } else {
+        format!("{current} {token}")
+    }
+}
+
+fn wrap_lines(
+    fonts: &FontStack<'_>,
+    size: f32,
+    bold: bool,
+    text: &str,
+    max_width: i32,
+    max_lines: usize,
+) -> Vec<String> {
+    let max_lines = max_lines.max(1);
+    let words = tokenize(text);
+    if words.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut index = 0;
+    while index < words.len() {
+        let word = &words[index];
+        let candidate = join_token(&current, word);
+        if fonts.measure(&candidate, size, bold) <= max_width {
+            current = candidate;
+            index += 1;
+            continue;
+        }
+        if !current.is_empty() {
+            if lines.len() + 1 == max_lines {
+                let mut rest = current;
+                for extra in &words[index..] {
+                    rest = join_token(&rest, extra);
+                }
+                lines.push(ellipsize(fonts, size, bold, &rest, max_width));
+                return lines;
+            }
+            lines.push(std::mem::take(&mut current));
+            continue;
+        }
+        if lines.len() + 1 == max_lines {
+            let mut rest = String::new();
+            for extra in &words[index..] {
+                rest = join_token(&rest, extra);
+            }
+            lines.push(ellipsize(fonts, size, bold, &rest, max_width));
+            return lines;
+        }
+        lines.push(ellipsize(fonts, size, bold, word, max_width));
+        index += 1;
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+fn ellipsize(fonts: &FontStack<'_>, size: f32, bold: bool, text: &str, max_width: i32) -> String {
+    if fonts.measure(text, size, bold) <= max_width {
+        return text.to_owned();
+    }
+    let mut candidate = text.to_owned();
+    while !candidate.is_empty() {
+        candidate.pop();
+        let with_ellipsis = format!("{candidate}...");
+        if fonts.measure(&with_ellipsis, size, bold) <= max_width {
+            return with_ellipsis;
+        }
+    }
+    "...".into()
+}
+
+fn blend(img: &mut RgbaImage, x: i32, y: i32, color: Rgba<u8>, alpha: f32) {
+    if x < 0 || y < 0 {
+        return;
+    }
+    let (x, y) = (x as u32, y as u32);
+    if x >= img.width() || y >= img.height() || alpha <= 0.0 {
+        return;
+    }
+    let dst = img.get_pixel_mut(x, y);
+    let a = alpha.clamp(0.0, 1.0);
+    for i in 0..3 {
+        dst.0[i] = ((1.0 - a) * f32::from(dst.0[i]) + a * f32::from(color.0[i])).round() as u8;
+    }
+}
+
+pub fn format_ms(ms: u32) -> CompactString {
+    let total = ms / 1000;
+    let minutes = total / 60;
+    let seconds = total % 60;
+    format_compact!("{minutes}:{seconds:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn png_header(bytes: &[u8]) -> bool {
+        bytes.starts_with(&[0x89, b'P', b'N', b'G'])
+    }
+
+    #[test]
+    fn renders_playing_and_idle_cards() {
+        let playing = render_card(&example_playing_card()).unwrap();
+        assert_eq!(playing.dimensions(), (CARD_WIDTH, CARD_HEIGHT));
+        let png = encode_png(&playing).unwrap();
+        assert!(png_header(&png));
+        assert!(png.len() > 2_000);
+
+        let idle = render_card(&CardKind::Idle).unwrap();
+        assert_eq!(idle.dimensions(), (CARD_WIDTH, CARD_HEIGHT));
+        assert!(png_header(&encode_png(&idle).unwrap()));
+
+        let error = render_card(&CardKind::Error {
+            message: CompactString::from("Spotify timed out"),
+        })
+        .unwrap();
+        assert!(png_header(&encode_png(&error).unwrap()));
+        assert!(encode_jpeg(&playing, 90).unwrap().len() > 1_000);
+
+        let long = render_card(&CardKind::Playing {
+            username: CompactString::from("swiftie"),
+            title: CompactString::from(
+                "The Last Great American Dynasty Of The Late Twentieth Century",
+            ),
+            artist: CompactString::from("Taylor Swift, Bon Iver, The National, and Friends"),
+            album: CompactString::from("Folklore"),
+            progress_ms: 83_000,
+            duration_ms: 243_000,
+            is_playing: true,
+            album_art: Some(synthetic_album_art()),
+            avatar: Some(synthetic_avatar()),
+            track_url: None,
+        })
+        .unwrap();
+        assert_eq!(long.dimensions(), (CARD_WIDTH, CARD_HEIGHT));
+    }
+
+    #[test]
+    fn formats_timestamps() {
+        assert_eq!(format_ms(83_000), "1:23");
+        assert_eq!(format_ms(243_000), "4:03");
+        assert_eq!(format_ms(0), "0:00");
+    }
+
+    #[test]
+    fn wraps_long_text_and_ellipsizes_only_when_needed() {
+        let fonts = FontStack::load().unwrap();
+        let short = wrap_lines(&fonts, 58.0, true, "Midnight City", 520, 3);
+        assert_eq!(short, vec!["Midnight City".to_owned()]);
+
+        let wrapped = wrap_lines(
+            &fonts,
+            58.0,
+            true,
+            "The Last Great American Dynasty",
+            360,
+            3,
+        );
+        assert!(wrapped.len() >= 2);
+        assert!(wrapped.iter().all(|line| !line.ends_with("...")));
+
+        let overflow = wrap_lines(
+            &fonts,
+            58.0,
+            true,
+            "A Very Long Track Title That Cannot Possibly Fit On Three Wrapped Lines Without Overflow",
+            280,
+            2,
+        );
+        assert_eq!(overflow.len(), 2);
+        assert!(overflow.last().unwrap().ends_with("..."));
+
+        let cjk = wrap_lines(&fonts, 58.0, true, "荒城の月は春の夜に", 120, 4);
+        assert!(cjk.len() >= 2);
+        assert!(cjk.iter().any(|line| line.contains('月')));
+    }
+
+    #[test]
+    fn accent_follows_cover_color() {
+        let mut red = RgbaImage::new(32, 32);
+        for pixel in red.pixels_mut() {
+            *pixel = Rgba([200, 24, 40, 255]);
+        }
+        let accent = accent_from(&red);
+        assert!(accent[0] > accent[1] && accent[0] > accent[2]);
+    }
+}
