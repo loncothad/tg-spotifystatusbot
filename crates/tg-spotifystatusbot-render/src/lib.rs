@@ -9,15 +9,17 @@ use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 
 use palette::{FromColor, OklabHue, Oklch, Srgb};
 
-pub const CARD_WIDTH: u32 = 1320;
-pub const CARD_HEIGHT: u32 = 504;
+pub const CARD_WIDTH: u32 = 1440;
+pub const CARD_HEIGHT: u32 = 552;
 
-const FONT_REGULAR: &[u8] = include_bytes!("../assets/fonts/GoNotoKurrent-Regular.ttf");
-const FONT_BOLD: &[u8] = include_bytes!("../assets/fonts/GoNotoKurrent-Bold.ttf");
+const FONT_REGULAR: &[u8] = include_bytes!("../assets/fonts/GoNotoCurrent-Regular.ttf");
+const FONT_BOLD: &[u8] = include_bytes!("../assets/fonts/GoNotoCurrent-Bold.ttf");
+const FONT_EMOJI: &[u8] = include_bytes!("../assets/fonts/NotoEmoji.ttf");
 
 struct FontStack<'a> {
     regular: FontRef<'a>,
     bold: FontRef<'a>,
+    emoji: FontRef<'a>,
 }
 
 impl FontStack<'static> {
@@ -25,8 +27,21 @@ impl FontStack<'static> {
         Ok(Self {
             regular: FontRef::try_from_slice(FONT_REGULAR).map_err(|_| RenderError::Font)?,
             bold: FontRef::try_from_slice(FONT_BOLD).map_err(|_| RenderError::Font)?,
+            emoji: FontRef::try_from_slice(FONT_EMOJI).map_err(|_| RenderError::Font)?,
         })
     }
+}
+
+fn is_format_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{200c}'
+            | '\u{200d}'
+            | '\u{20e3}'
+            | '\u{fe00}'..='\u{fe0f}'
+            | '\u{e0100}'..='\u{e01ef}'
+            | '\u{1f3fb}'..='\u{1f3ff}'
+    )
 }
 
 impl FontStack<'_> {
@@ -37,13 +52,15 @@ impl FontStack<'_> {
     fn pick(&self, ch: char, bold: bool) -> &FontRef<'_> {
         if bold && Self::has(&self.bold, ch) {
             &self.bold
-        } else {
+        } else if Self::has(&self.regular, ch) {
             &self.regular
+        } else {
+            &self.emoji
         }
     }
 
     fn first_ink_left(&self, text: &str, size: f32, bold: bool) -> f32 {
-        let Some(ch) = text.chars().next() else {
+        let Some(ch) = text.chars().find(|ch| !is_format_char(*ch)) else {
             return 0.0;
         };
         let scale = PxScale::from(size);
@@ -59,7 +76,7 @@ impl FontStack<'_> {
     fn measure(&self, text: &str, size: f32, bold: bool) -> i32 {
         let scale = PxScale::from(size);
         let mut width = 0.0f32;
-        for ch in text.chars() {
+        for ch in text.chars().filter(|ch| !is_format_char(*ch)) {
             let font = self.pick(ch, bold);
             width += font.as_scaled(scale).h_advance(font.glyph_id(ch));
         }
@@ -80,7 +97,7 @@ impl FontStack<'_> {
         let scale = PxScale::from(size);
         let ascent = self.regular.as_scaled(scale).ascent();
         let mut caret = x as f32 - self.first_ink_left(text, size, bold);
-        for ch in text.chars() {
+        for ch in text.chars().filter(|ch| !is_format_char(*ch)) {
             let font = self.pick(ch, bold);
             let scaled = font.as_scaled(scale);
             let id = font.glyph_id(ch);
@@ -204,7 +221,7 @@ pub struct RenderOptions {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-#[default(pad_x: 40, pad_top: 40, pad_bottom: 40, radius: 16, gap: 36, header: 52, header_gap: 32, art: 340)]
+#[default(pad_x: 44, pad_top: 44, pad_bottom: 44, radius: 18, gap: 40, header: 56, header_gap: 36, art: 372)]
 struct Layout {
     pad_x: i32,
     pad_top: i32,
@@ -296,7 +313,7 @@ pub fn render_card_with(kind: &CardKind, options: &RenderOptions) -> Result<Rgba
                 layout.pad_top,
                 options.width as i32 - layout.pad_x * 2,
             );
-            let album_size = 36u32;
+            let album_size = 40u32;
             let gap_meta = 8i32;
             let fit = fit_text_lines(
                 &fonts,
@@ -450,9 +467,9 @@ pub fn example_card_ru() -> CardKind {
 pub fn example_card_en() -> CardKind {
     example_card(
         "alex",
-        "Greensleeves",
-        "Traditional",
-        "English Airs",
+        "Greensleeves 🎵",
+        "Traditional ♪",
+        "English Airs ✨",
         145.0,
     )
 }
@@ -614,7 +631,7 @@ fn rounded_alpha(x: f32, y: f32, w: f32, h: f32, radius: f32) -> f32 {
     (0.75 - dist).clamp(0.0, 1.0)
 }
 
-const CONTROL_H: i32 = 70;
+const CONTROL_H: i32 = 76;
 const BAR_H: u32 = 12;
 
 fn line_height(size: u32) -> i32 {
@@ -800,7 +817,7 @@ fn draw_progress(
     );
 }
 
-const AVATAR_SIZE: u32 = 52;
+const AVATAR_SIZE: u32 = 56;
 
 #[allow(clippy::too_many_arguments)]
 fn draw_listener_line(
@@ -812,7 +829,7 @@ fn draw_listener_line(
     y: i32,
     max_width: i32,
 ) {
-    let size = 48.0;
+    let size = 52.0;
     let suffix = " is now playing";
     let suffix_w = fonts.measure(suffix, size, false);
     let decoded = avatar.and_then(|bytes| decode_art(Some(bytes), AVATAR_SIZE));
@@ -1107,13 +1124,13 @@ mod tests {
     #[test]
     fn wraps_long_text_and_ellipsizes_only_when_needed() {
         let fonts = FontStack::load().unwrap();
-        for ch in "Alex Анна 山田荒城の月Подмосковные вечера Greensleeves".chars() {
+        for ch in "Alex Анна 山田荒城の月Подмосковные ♪✨♥★".chars() {
             if ch.is_whitespace() {
                 continue;
             }
             assert!(
-                FontStack::has(&fonts.regular, ch),
-                "Go Noto Kurrent missing {ch} (U+{:04X})",
+                FontStack::has(fonts.pick(ch, false), ch),
+                "Missing glyph for {ch} (U+{:04X})",
                 ch as u32
             );
         }

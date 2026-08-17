@@ -144,7 +144,8 @@ Cards use a stacked fallback so Latin, Cyrillic, and CJK can render:
 
 | File | Family | Scripts | License |
 | --- | --- | --- | --- |
-| `crates/tg-spotifystatusbot-render/assets/fonts/GoNotoKurrent-Regular.ttf` | [Go Noto Kurrent](https://github.com/satbyy/go-noto-universal) Regular | Latin, Cyrillic, Greek, CJK (Unihan IICore), and other living scripts | [SIL Open Font License 1.1](https://scripts.sil.org/OFL) |
-| `crates/tg-spotifystatusbot-render/assets/fonts/GoNotoKurrent-Bold.ttf` | [Go Noto Kurrent](https://github.com/satbyy/go-noto-universal) Bold | same | [SIL Open Font License 1.1](https://scripts.sil.org/OFL) |
+| `crates/tg-spotifystatusbot-render/assets/fonts/GoNotoCurrent-Regular.ttf` | [Go Noto Current](https://github.com/satbyy/go-noto-universal) Regular | Latin, Cyrillic, CJK (Unihan IICore), symbols, and other living scripts | [SIL Open Font License 1.1](https://scripts.sil.org/OFL) |
+| `crates/tg-spotifystatusbot-render/assets/fonts/GoNotoCurrent-Bold.ttf` | [Go Noto Current](https://github.com/satbyy/go-noto-universal) Bold | same | [SIL Open Font License 1.1](https://scripts.sil.org/OFL) |
+| `crates/tg-spotifystatusbot-render/assets/fonts/NotoEmoji.ttf` | [Noto Emoji](https://fonts.google.com/noto/specimen/Noto+Emoji) | Emoji (outline) | [SIL Open Font License 1.1](https://scripts.sil.org/OFL) |
 
-Go Noto Kurrent is a merged [Noto](https://fonts.google.com/noto) build so Latin, Cyrillic, and CJK share one metric system. Upstream Noto fonts are from [Google Fonts / Noto](https://github.com/notofonts). Examples: **荒城の月**, **Подмосковные вечера**, **Greensleeves**.
+Go Noto Current is a merged [Noto](https://fonts.google.com/noto) build so Latin, Cyrillic, CJK, and symbols share one metric system. Emoji fall back to Noto Emoji. Upstream fonts are from [Google Fonts / Noto](https://github.com/notofonts). Examples: **荒城の月**, **Подмосковные вечера**, **Greensleeves**.
